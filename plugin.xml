@@ -21,6 +21,8 @@
     <resource-file src="src/ios/scannerOverlay.xib"/>
     <resource-file src="src/ios/CDVBarcodeScanner.bundle"/>
     <source-file src="src/ios/CDVBarcodeScanner.mm"/>
+    <header-file src="src/ios/CDBackgroundContextView.h"/>
+    <source-file src="src/ios/CDBackgroundContextView.m"/>
   </platform>
   <platform name="android">
     <source-file src="src/android/com/phonegap/plugins/barcodescanner/BarcodeScanner.java" target-dir="src/com/phonegap/plugins/barcodescanner"/>
