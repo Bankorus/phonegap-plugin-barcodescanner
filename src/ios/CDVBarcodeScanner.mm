@@ -9,6 +9,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <AssetsLibrary/AssetsLibrary.h>
 #import <Cordova/CDVPlugin.h>
+#import "CDBackgroundContextView.h"
 
 
 //------------------------------------------------------------------------------
@@ -51,7 +52,8 @@
 @property (nonatomic, retain) CDVBarcodeScanner*           plugin;
 @property (nonatomic, retain) NSString*                   callback;
 @property (nonatomic, retain) UIViewController*           parentViewController;
-@property (nonatomic, retain) CDVbcsViewController*        viewController;
+//@property (nonatomic, retain) CDVbcsViewController*        viewController;
+@property (nonatomic, retain) UINavigationController*        viewController;
 @property (nonatomic, retain) AVCaptureSession*           captureSession;
 @property (nonatomic, retain) AVCaptureVideoPreviewLayer* previewLayer;
 @property (nonatomic, retain) NSString*                   alternateXib;
@@ -101,6 +103,8 @@
 @property (nonatomic, retain) IBOutlet UIView* overlayView;
 @property (nonatomic, retain) UIToolbar * toolbar;
 @property (nonatomic, retain) UIView * reticleView;
+@property (nonatomic, strong) CDBackgroundContextView *contentView;
+
 // unsafe_unretained is equivalent to assign - used to prevent retain cycles in the property below
 @property (nonatomic, unsafe_unretained) id orientationDelegate;
 
@@ -142,8 +146,7 @@
 -(BOOL)isUsageDescriptionSet
 {
   NSDictionary * plist = [[NSBundle mainBundle] infoDictionary];
-  if ([plist objectForKey:@"NSCameraUsageDescription" ] ||
-      [[NSBundle mainBundle] localizedStringForKey: @"NSCameraUsageDescription" value: nil table: @"InfoPlist"]) {
+  if ([plist objectForKey:@"NSCameraUsageDescription" ]) {
     return YES;
   }
   return NO;
@@ -180,7 +183,7 @@
         [self returnError:capabilityError callback:callback];
         return;
     } else if ([self notHasPermission]) {
-        NSString * error = NSLocalizedString(@"Access to the camera has been prohibited; please enable it in the Settings app to continue.",nil);
+        NSString * error = NSLocalizedString(@"Access to the camera has been prohibited; please enable it in the Settings to continue.",nil);
         [self returnError:error callback:callback];
         return;
     } else if (![self isUsageDescriptionSet]) {
@@ -348,12 +351,70 @@ parentViewController:(UIViewController*)parentViewController
         return;
     }
 
-    self.viewController = [[CDVbcsViewController alloc] initWithProcessor: self alternateOverlay:self.alternateXib];
-    // here we set the orientation delegate to the MainViewController of the app (orientation controlled in the Project Settings)
-    self.viewController.orientationDelegate = self.plugin.viewController;
+    //!< 添加viewC
+    self.viewController = [self getANewNavController];
 
     // delayed [self openDialog];
     [self performSelector:@selector(openDialog) withObject:nil afterDelay:1];
+}
+
+
+- (UINavigationController *)getANewNavController {
+    
+//    self.viewController = [[CDVbcsViewController alloc] initWithProcessor: self alternateOverlay:self.alternateXib];
+//
+//    // here we set the orientation delegate to the MainViewController of the app (orientation controlled in the Project Settings)
+//    self.viewController.orientationDelegate = self.plugin.viewController;
+    
+    CDVbcsViewController *vc = [[CDVbcsViewController alloc] initWithProcessor: self alternateOverlay:self.alternateXib];
+    vc.view.backgroundColor = [UIColor whiteColor];
+    vc.orientationDelegate = self.plugin.viewController;
+    UINavigationController *navC = [[UINavigationController alloc] initWithRootViewController:vc];
+    
+    
+    UIView *navBar = navC.navigationBar.subviews.firstObject;
+    if (@available(iOS 11.0, *))
+    {   // sometimes we can't change _UIBarBackground alpha
+        for (UIView *view in navBar.subviews) {
+            view.alpha = 0;
+//            view.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0];
+        }
+    } else {
+        navBar.alpha = 0;
+//        navBar.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0];
+
+    }
+
+    [navC.navigationBar setClipsToBounds:YES];
+    [vc setTitle:@"Scan QR Code"];
+    
+    [navC.navigationBar setTitleTextAttributes:@{NSFontAttributeName:[UIFont systemFontOfSize:19], NSForegroundColorAttributeName:[UIColor whiteColor]}];
+    navC.navigationBar.tintColor = [UIColor whiteColor];
+    
+    
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
+    btn.frame = CGRectMake(20, 10, 80, 20);
+    [btn setTitle:@"cancel" forState:UIControlStateNormal];
+    [btn.titleLabel setTextColor:[UIColor whiteColor]];
+    [btn addTarget:self action:@selector(actionCancelScan) forControlEvents:UIControlEventTouchUpInside];
+    [navC.navigationBar addSubview:btn];
+    
+    
+//    UIBarButtonItem *item = [[UIBarButtonItem alloc] initWithTitle:@"cancel" style:UIBarButtonItemStyleDone target:self action:@selector(actionCancelScan)];
+//    navC.navigationItem.backBarButtonItem = item;
+//    navC.navigationItem.leftBarButtonItem = item;
+//    navC.navigationItem.rightBarButtonItem = item;
+//
+//    [navC.navigationBar setTintColor:[UIColor redColor]];
+    
+    return navC;
+}
+
+/**
+ 取消扫描
+ */
+- (void)actionCancelScan {
+    [self barcodeScanCancelled];
 }
 
 //--------------------------------------------------------------------------
@@ -428,7 +489,7 @@ parentViewController:(UIViewController*)parentViewController
 
 //--------------------------------------------------------------------------
 - (void)barcodeScanFailed:(NSString*)message {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    dispatch_async(dispatch_get_main_queue(), ^{
         [self barcodeScanDone:^{
             [self.plugin returnError:message callback:self.callback];
         }];
@@ -781,8 +842,65 @@ parentViewController:(UIViewController*)parentViewController
 
     [self.view addSubview:[self buildOverlayView]];
     [self startCapturing];
+    
+    [self judeCarmeCanUse];
 
     [super viewDidAppear:animated];
+}
+
+#pragma mark - 判断相机权限
+
+- (BOOL)judeCarmeCanUse {
+    NSString *mediaType = AVMediaTypeVideo;//读取媒体类型
+    AVAuthorizationStatus authStatus = [AVCaptureDevice authorizationStatusForMediaType:mediaType];//读取设备授权状态
+    if (authStatus == AVAuthorizationStatusRestricted) { // 因为家长控制, 导致应用无法访问相机(跟用户的选择没有关系)
+        
+        } else if (authStatus == AVAuthorizationStatusDenied) { // 用户拒绝当前应用访问相机(用户当初点击了"不允许")
+            [self showAlertView];
+            return NO;
+            } else if (authStatus == AVAuthorizationStatusAuthorized) { // 用户允许当前应用访问相机(用户当初点击了"好")
+                
+                return YES;
+            } else if (authStatus == AVAuthorizationStatusNotDetermined) { // 用户还没有做出选择
+                // 弹框请求用户授权
+                [AVCaptureDevice requestAccessForMediaType:mediaType completionHandler:^(BOOL granted) {
+                    if (granted) {
+                        NSLog(@"点击了允许");
+                    }else
+                    {
+                        //!< 点击了以后就返回上个页面
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [self.processor actionCancelScan];
+                        });
+                    }
+                }];
+                return NO;
+            }
+    return YES;
+}
+
+- (void)showAlertView
+{
+    // 1.创建UIAlertController
+    UIAlertController *alertController = [UIAlertController alertControllerWithTitle:@"Camera Permissions Off" message:@"Please press the Setting button to [Settings - Privacy - Camera] to open the access switch" preferredStyle:UIAlertControllerStyleAlert];
+    // 2.创建并添加按钮
+    UIAlertAction *okAction = [UIAlertAction actionWithTitle:@"Setting" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        NSURL *url = [NSURL URLWithString:UIApplicationOpenSettingsURLString];
+        if ([[UIApplication sharedApplication] canOpenURL:url]) {
+            [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:^(BOOL success) {
+                
+            }];
+        }
+    }];
+    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
+        //!< 点击了以后就返回上个页面
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self.processor actionCancelScan];
+        });
+    }];
+    [alertController addAction:okAction];           // A
+    [alertController addAction:cancelAction];       // B
+    [self presentViewController:alertController animated:YES completion:nil];
 }
 
 //--------------------------------------------------------------------------
@@ -847,6 +965,11 @@ parentViewController:(UIViewController*)parentViewController
     overlayView.autoresizesSubviews = YES;
     overlayView.autoresizingMask    = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     overlayView.opaque              = NO;
+    
+    self.contentView = [[CDBackgroundContextView alloc] initWithFrame:CGRectMake(0, 64, bounds.size.width, bounds.size.height)];
+    overlayView = self.contentView;
+    return overlayView;
+    
 
     self.toolbar = [[UIToolbar alloc] init];
     self.toolbar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
